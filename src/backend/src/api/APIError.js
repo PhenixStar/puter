@@ -111,6 +111,10 @@ class APIError {
             status: 422,
             message: 'Cannot read a directory.',
         },
+        'symlink_loop': {
+            status: 422,
+            message: 'Too many levels of symbolic links.',
+        },
         'source_and_dest_are_the_same': {
             status: 422,
             message: 'Source and destination are the same.',

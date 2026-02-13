@@ -30,12 +30,10 @@ function tokenOrUuidFromInput (value) {
         return value;
     }
     const s = value.trim();
-    console.log('s?', s);
     if ( s.includes('/token-read') ) {
         try {
             const url = new URL(s);
             const token = url.searchParams.get('token');
-            console.log('token?', token);
             return token ?? s;
         } catch (_) {
             return s;

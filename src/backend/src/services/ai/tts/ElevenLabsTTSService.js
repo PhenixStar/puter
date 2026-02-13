@@ -86,6 +86,7 @@ class ElevenLabsTTSService extends BaseService {
                 ...headers,
             },
             body: body ? JSON.stringify(body) : undefined,
+            signal: AbortSignal.timeout(120_000),
         });
 
         if ( response.ok ) {

@@ -172,6 +172,10 @@ function validate_fsentry_name (name) {
     {
         throw { message: "Name can not be the '..' character." };
     }
+    else if ( /[<>&"']/.test(name) )
+    {
+        throw { message: 'Name can not contain HTML-sensitive characters (<, >, &, ", \').' };
+    }
     else if ( name.length > config.max_fsentry_name_length )
     {
         throw { message: `Name can not be longer than ${config.max_fsentry_name_length} characters` };

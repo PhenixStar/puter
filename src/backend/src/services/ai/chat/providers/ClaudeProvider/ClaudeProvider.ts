@@ -357,7 +357,7 @@ export class ClaudeProvider implements IChatProvider {
         try {
             msg = await anthropic.messages.create(sdkParams);
         } catch (e) {
-            console.log('FUCK! anthropic error: ', e);
+            this.errorService.report('claude:completion-error', { source: e });
             throw e;
         }
         await cleanup_files();

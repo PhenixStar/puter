@@ -291,10 +291,16 @@ class OpenAISpeechToTextService extends BaseService {
         }
 
         let transcription;
-        if ( translate ) {
-            transcription = await this.openai.audio.translations.create(payload);
-        } else {
-            transcription = await this.openai.audio.transcriptions.create(payload);
+        try {
+            if ( translate ) {
+                transcription = await this.openai.audio.translations.create(payload);
+            } else {
+                transcription = await this.openai.audio.transcriptions.create(payload);
+            }
+        } catch (e) {
+            throw APIError.create('internal_error', null, {
+                message: `OpenAI transcription failed (status ${e.status || 500})`,
+            });
         }
 
         this.meteringService.incrementUsage(actor, usageType, estimatedSeconds);

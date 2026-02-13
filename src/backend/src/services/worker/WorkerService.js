@@ -322,11 +322,14 @@ class WorkerService extends BaseService {
                 }
 
             },
+            // TODO: startLogs/endLogs are disabled -- they referenced
+            // undefined variables (runtime, code) and always threw.
+            // Implement properly when logging support is added.
             async startLogs ({ workerName, authorization }) {
-                return await this.exec_({ runtime, code });
+                throw new Error('startLogs is not yet implemented');
             },
             async endLogs ({ workerName, authorization }) {
-                return await this.exec_({ runtime, code });
+                throw new Error('endLogs is not yet implemented');
             },
             async getLoggingUrl ({ }) {
                 return this.config.loggingUrl;

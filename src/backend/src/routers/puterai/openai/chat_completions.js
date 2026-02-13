@@ -86,6 +86,11 @@ module.exports = eggspress('/openai/v1/chat/completions', {
         throw APIError.create('permission_denied');
     }
 
+    const svc_edgeRateLimit = req.services.get('edge-rate-limit');
+    if ( ! svc_edgeRateLimit.check('ai-chat') ) {
+        throw APIError.create('too_many_requests');
+    }
+
     const body = req.body || {};
     const stream = !!body.stream;
 

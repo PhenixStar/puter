@@ -180,6 +180,7 @@ class ElevenLabsVoiceChangerService extends BaseService {
                 'xi-api-key': this.apiKey,
             },
             body: formData,
+            signal: AbortSignal.timeout(120_000),
         });
 
         if ( ! response.ok ) {

@@ -58,9 +58,12 @@ class LLRead extends LLFilesystemOperation {
         let type = await fsNode.get('type');
         let traversedCount = 0;
         while ( type === TYPE_SYMLINK ) {
+            traversedCount++;
+            if ( traversedCount > 20 ) {
+                throw APIError.create('symlink_loop');
+            }
             fsNode = await fsNode.getTarget();
             type = await fsNode.get('type');
-            traversedCount++;
         }
 
         // validate symlink leaf node

@@ -23,12 +23,20 @@ const BaseService = require('../BaseService');
 * This class provides functionalities to create OTP secrets, recovery codes,
 * and verify OTPs against given secrets and codes, using the 'otpauth' and 'crypto' libraries.
 */
+const TOTP_WINDOW_MS = 90 * 1000; // 3 x 30s windows
+
 class OTPService extends BaseService {
     static MODULES = {
         otpauth: require('otpauth'),
         crypto: require('crypto'),
         ['hi-base32']: require('hi-base32'),
     };
+
+    _construct () {
+        // In-memory map for TOTP replay prevention.
+        // Key: "<user_id>:<delta>", Value: timestamp of use.
+        this._used_totp_codes = new Map();
+    }
 
     create_secret (label) {
         const require = this.require;
@@ -66,7 +74,7 @@ class OTPService extends BaseService {
         return code;
     }
 
-    verify (label, secret, code) {
+    verify (label, secret, code, { user_id } = {}) {
         const require = this.require;
         const otpauth = require('otpauth');
 
@@ -83,7 +91,32 @@ class OTPService extends BaseService {
         const delta = totp.validate({ token: code });
         if ( delta === null ) return false;
         if ( ! allowed.includes(delta) ) return false;
+
+        // TOTP replay prevention (RFC 6238 Section 5.2)
+        if ( user_id ) {
+            const replay_key = `${user_id}:${delta}`;
+            const now = Date.now();
+            const last_used = this._used_totp_codes.get(replay_key);
+            if ( last_used && (now - last_used) < TOTP_WINDOW_MS ) {
+                return false;
+            }
+            this._used_totp_codes.set(replay_key, now);
+            this._cleanup_used_codes();
+        }
+
         return true;
+    }
+
+    /**
+     * Removes expired entries from the TOTP replay prevention map.
+     */
+    _cleanup_used_codes () {
+        const now = Date.now();
+        for ( const [key, timestamp] of this._used_totp_codes ) {
+            if ( now - timestamp > TOTP_WINDOW_MS ) {
+                this._used_totp_codes.delete(key);
+            }
+        }
     }
 
     /**

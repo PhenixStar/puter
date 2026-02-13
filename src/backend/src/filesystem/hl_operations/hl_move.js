@@ -144,7 +144,7 @@ class HLMove extends HLFilesystemOperation {
             throw APIError.create('source_and_dest_are_the_same');
         }
         if ( await is_ancestor_of(src_uid, par_uid) ) {
-            throw APIError('cannot_move_item_into_itself');
+            throw APIError.create('cannot_move_item_into_itself');
         }
 
         let overwritten;
@@ -170,6 +170,9 @@ class HLMove extends HLFilesystemOperation {
                 dest = await parent.getChild(target_name);
             }
             else if ( values.overwrite ) {
+                if ( ! await chkperm(dest.entry, values.user.id, 'rm') ) {
+                    throw APIError.create('forbidden');
+                }
                 overwritten = await dest.getSafeEntry();
                 const hl_remove = new HLRemove();
                 await hl_remove.run({

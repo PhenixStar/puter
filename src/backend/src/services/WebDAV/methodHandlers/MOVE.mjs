@@ -40,7 +40,7 @@ export const MOVE = async ( req, res, filePath, fileNode, headerLockToken ) => {
         }
         destinationPath = decodeURI(destinationPath);
 
-        const hasDestinationWriteAccess = hasWritePermissionInDAV(destinationPath, headerLockToken);
+        const hasDestinationWriteAccess = await hasWritePermissionInDAV(...servicesForLocks, destinationPath, headerLockToken);
 
         // Parse Overwrite header (T = true, F = false, default = T)
         const overwriteHeader = req.headers.overwrite;

@@ -76,7 +76,7 @@ export const COPY = async ( req, res, _filePath, fileNode, headerLockToken ) => 
         const hasDestinationWriteAccess = await hasWritePermissionInDAV(...servicesForLocks, destinationPath, headerLockToken);
         if ( ! hasDestinationWriteAccess ) {
             // DAV lock in place blocking write to this file
-            res.status(423).end( 'Locked: No write access to destination');
+            return res.status(423).end( 'Locked: No write access to destination');
         }
 
         // Perform the copy operation

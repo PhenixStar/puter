@@ -208,6 +208,17 @@ router.post('/save_account', auth, express.json(), async (req, res, next) => {
             }
         }
 
+        // Reassign group: move from temp group to permanent user group
+        const svc_group = req.services.get('group');
+        await svc_group.remove_users({
+            uid: config.default_temp_group,
+            users: [req.body.username],
+        });
+        await svc_group.add_users({
+            uid: config.default_user_group,
+            users: [req.body.username],
+        });
+
         // create token for login
         const svc_auth = req.services.get('auth');
         const { token } = await svc_auth.create_session_token(req.user, { req });

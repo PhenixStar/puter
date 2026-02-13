@@ -21,6 +21,7 @@ const express = require('express');
 const { invalidate_cached_user, get_user } = require('../helpers');
 const router = new express.Router();
 const auth = require('../middleware/auth.js');
+const config = require('../config');
 const { DB_WRITE } = require('../services/database/consts');
 
 // -----------------------------------------------------------------------//
@@ -69,10 +70,9 @@ router.post('/passwd', auth, express.json(), async (req, res, next) => {
             return res.status(400).send('old_pass does not match your current password.');
         }
         // check new_pass length
-        // todo use config, 6 is hard-coded and wrong
-        else if ( req.body.new_pass.length < 6 )
+        else if ( req.body.new_pass.length < config.min_pass_length )
         {
-            return res.status(400).send('new_pass must be at least 6 characters long.');
+            return res.status(400).send(`new_pass must be at least ${config.min_pass_length} characters long.`);
         }
         else {
             await db.write('UPDATE user SET password=?, `pass_recovery_token` = NULL, `change_email_confirm_token` = NULL WHERE `id` = ?',

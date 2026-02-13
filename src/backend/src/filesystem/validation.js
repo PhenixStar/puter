@@ -63,7 +63,7 @@ const is_valid_path = function is_valid_path (path, {
     allow_path_fragment,
 } = {}) {
     if ( typeof path !== 'string' ) return false;
-    if ( path.length < 1 ) false;
+    if ( path.length < 1 ) return false;
     if ( path_excludes().test(path) ) return false;
     for ( const exclude of safety_excludes ) {
         if ( exclude.test(path) ) return false;

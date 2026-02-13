@@ -78,6 +78,7 @@ export class XAIProvider implements IChatProvider {
 
         } catch (e) {
             console.log('XAI AI process_input_messages error: ', e);
+            throw e;
         }
 
         return OpenAIUtil.handle_completion_output({

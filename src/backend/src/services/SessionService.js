@@ -21,6 +21,8 @@ const { get_user } = require('../helpers');
 const { asyncSafeSetInterval } = require('@heyputer/putility').libs.promise;
 const SECOND = 1000;
 const MINUTE = 60 * SECOND;
+const DAY = 24 * 60 * MINUTE;
+const MAX_CACHE_SIZE = 10000;
 const BaseService = require('./BaseService');
 const { DB_WRITE } = require('./database/consts');
 
@@ -61,21 +63,14 @@ class SessionService extends BaseService {
         this.db = await this.services.get('database').get(DB_WRITE, 'session');
 
         (async () => {
-            // TODO: change to 5 minutes or configured value
-            /**
-            * Initializes periodic session updates.
-            *
-            * This method sets up an interval to call `_update_sessions` every 2 minutes.
-            *
-            * @memberof SessionService
-            * @private
-            * @async
-            * @param {none} - No parameters are required.
-            * @returns {Promise<void>} - Resolves when the interval is set.
-            */
             asyncSafeSetInterval(async () => {
                 await this._update_sessions();
             }, 2 * MINUTE);
+
+            // Cleanup stale sessions every 30 minutes
+            asyncSafeSetInterval(async () => {
+                await this._cleanup_stale_sessions();
+            }, 30 * MINUTE);
         })();
     }
 
@@ -109,6 +104,7 @@ class SessionService extends BaseService {
             meta,
         };
         this.sessions[uuid] = session;
+        this._evict_lru();
 
         return session;
     }
@@ -142,6 +138,7 @@ class SessionService extends BaseService {
         const user = await get_user(session.user_id);
         session.user_uid = user?.uuid;
         this.sessions[uuid] = session;
+        this._evict_lru();
         return session;
     }
     /**
@@ -190,6 +187,43 @@ class SessionService extends BaseService {
         delete this.sessions[uuid];
         return this.db.write('DELETE FROM `sessions` WHERE `uuid` = ?',
                         [uuid]);
+    }
+
+    /**
+     * Deletes sessions not updated in 30 days from the database
+     * and removes them from the in-memory cache.
+     */
+    async _cleanup_stale_sessions () {
+        this.log.tick('CLEANING STALE SESSIONS');
+        const threshold_unix = Math.floor((Date.now() - 30 * DAY) / 1000);
+        await this.db.write(
+            'DELETE FROM `sessions` WHERE `last_activity` < ?',
+            [threshold_unix]
+        );
+        // Also evict stale entries from in-memory cache
+        const now = Date.now();
+        for ( const key of Object.keys(this.sessions) ) {
+            const session = this.sessions[key];
+            if ( now - session.last_touch > 30 * DAY ) {
+                delete this.sessions[key];
+            }
+        }
+    }
+
+    /**
+     * Evicts least-recently-used sessions from in-memory cache
+     * when it exceeds MAX_CACHE_SIZE.
+     */
+    _evict_lru () {
+        const keys = Object.keys(this.sessions);
+        if ( keys.length <= MAX_CACHE_SIZE ) return;
+        const sorted = keys.sort(
+            (a, b) => this.sessions[a].last_touch - this.sessions[b].last_touch
+        );
+        const evict_count = keys.length - MAX_CACHE_SIZE;
+        for ( let i = 0; i < evict_count; i++ ) {
+            delete this.sessions[sorted[i]];
+        }
     }
 
     async _update_sessions () {

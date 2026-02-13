@@ -120,6 +120,14 @@ class EdgeRateLimitService extends BaseService {
                 limit: 10,
                 window: HOUR,
             },
+            ['ai-chat']: {
+                limit: 60,
+                window: 1 * MINUTE,
+            },
+            ['ai-completion']: {
+                limit: 60,
+                window: 1 * MINUTE,
+            },
 
         };
         this.requests = new Map();

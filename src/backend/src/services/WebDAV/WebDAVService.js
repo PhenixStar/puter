@@ -129,7 +129,7 @@ class WebDAVService extends BaseService {
                 const svc_otp = this.services.get('otp');
                 const ok = svc_otp.verify(user.username,
                                 user.otp_secret,
-                                otpToken);
+                                otpToken, { user_id: user.id });
                 if ( ! ok ) {
                     return null;
                 }

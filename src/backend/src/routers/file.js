@@ -156,29 +156,38 @@ router.get('/file', async (req, res, next) => {
     // Range
     //--------------------------------------------------
     if ( range ) {
-        res.status(206);
         const rangeInfo = parseRangeHeader(req.headers['range']);
         if ( rangeInfo ) {
             const { start, end, isMultipart } = rangeInfo;
 
+            // Validate range bounds against file size
+            if ( fileSize !== null && fileSize !== undefined ) {
+                if ( start >= fileSize || (end !== null && start > end) ) {
+                    res.set('Content-Range', `bytes */${fileSize}`);
+                    return res.status(416).send({ message: 'Range Not Satisfiable' });
+                }
+            }
+
+            res.status(206);
+
             // For open-ended ranges, we need to calculate the actual end byte
             let actualEnd = end;
-            let fileSize = null;
+            let resolvedFileSize = null;
 
             try {
-                fileSize = fsentry[0].size;
+                resolvedFileSize = fsentry[0].size;
                 if ( end === null ) {
-                    actualEnd = fileSize - 1; // File size is 1-based, end byte is 0-based
+                    actualEnd = resolvedFileSize - 1; // File size is 1-based, end byte is 0-based
                 }
             } catch (e) {
                 // If we can't get file size, we'll let the storage layer handle it
                 // and not set Content-Range header
                 actualEnd = null;
-                fileSize = null;
+                resolvedFileSize = null;
             }
 
             if ( actualEnd !== null ) {
-                const totalSize = fileSize !== null ? fileSize : '*';
+                const totalSize = resolvedFileSize !== null ? resolvedFileSize : '*';
                 const contentRange = `bytes ${start}-${actualEnd}/${totalSize}`;
                 res.set('Content-Range', contentRange);
             }
@@ -189,6 +198,8 @@ router.get('/file', async (req, res, next) => {
                     ? `bytes=${start}-${end}`
                     : `bytes=${start}-`;
             }
+        } else {
+            res.status(206);
         }
     }
 

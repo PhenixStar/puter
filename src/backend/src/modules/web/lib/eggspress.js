@@ -87,7 +87,7 @@ module.exports = function eggspress (route, settings, handler) {
     // the multipart request and store the files in `req.files`.
     if ( settings.files ) {
         for ( const key of settings.files ) {
-            mw.push(multer().array(key));
+            mw.push(multer({ limits: { fileSize: 100_000_000 } }).array(key));
         }
     }
 

@@ -578,6 +578,12 @@ class WebServerService extends BaseService {
         // app.use(helmet.referrerPolicy());
         app.disable('x-powered-by');
 
+        // Ensure X-Content-Type-Options: nosniff on all responses (defense-in-depth)
+        app.use((req, res, next) => {
+            res.setHeader('X-Content-Type-Options', 'nosniff');
+            next();
+        });
+
         // remove object and array query parameters
         app.use(function (req, res, next) {
             for ( let k in req.query ) {
@@ -611,6 +617,14 @@ class WebServerService extends BaseService {
         app.use(function (req, res, next) {
             const origin = req.headers.origin;
 
+            // Validate origin against allowed list and domain suffix
+            const allowedOrigins = config.allowed_origins || [];
+            const isOriginAllowed = !origin
+                || allowedOrigins.length === 0
+                || allowedOrigins.includes(origin)
+                || (config.domain && origin.endsWith('.' + config.domain));
+            const corsOrigin = isOriginAllowed ? (origin || '*') : 'null';
+
             const is_site =
                 req.hostname.endsWith(config.static_hosting_domain) ||
                 (config.static_hosting_domain_alt && req.hostname.endsWith(config.static_hosting_domain_alt));
@@ -627,7 +641,7 @@ class WebServerService extends BaseService {
                 ;
 
             if ( req.path === '/signup' || req.path === '/login' || req.path.startsWith('/extensions/') ) {
-                res.setHeader('Access-Control-Allow-Origin', origin ?? '*');
+                res.setHeader('Access-Control-Allow-Origin', corsOrigin);
             }
             // Website(s) to allow to connect
             if (
@@ -635,7 +649,7 @@ class WebServerService extends BaseService {
                 req.subdomains[req.subdomains.length - 1] === 'api' ||
                 req.subdomains[req.subdomains.length - 1] === 'dav'
             ) {
-                res.setHeader('Access-Control-Allow-Origin', origin ?? '*');
+                res.setHeader('Access-Control-Allow-Origin', corsOrigin);
             }
 
             // Request methods to allow

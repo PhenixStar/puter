@@ -43,7 +43,7 @@ class FSNodeParam {
 
         if ( uidOrPath.length === 0 ) {
             if ( this.optional ) return undefined;
-            APIError.create('field_empty', null, {
+            throw APIError.create('field_empty', null, {
                 key: this.srckey,
             });
         }

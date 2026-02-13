@@ -90,7 +90,7 @@ module.exports = eggspress('/auth/configure-2fa/:action', {
         const user = await get_user({ id: req.user.id, force: true });
         const svc_otp = x.get('services').get('otp');
         const code = req.body.code;
-        const ok = svc_otp.verify(user.username, user.otp_secret, code);
+        const ok = svc_otp.verify(user.username, user.otp_secret, code, { user_id: user.id });
         return { ok };
     };
 

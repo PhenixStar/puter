@@ -101,6 +101,11 @@ module.exports = eggspress('/openai/v1/completions', {
         throw APIError.create('permission_denied');
     }
 
+    const svc_edgeRateLimit = req.services.get('edge-rate-limit');
+    if ( ! svc_edgeRateLimit.check('ai-completion') ) {
+        throw APIError.create('too_many_requests');
+    }
+
     const body = req.body || {};
     const stream = !!body.stream;
 

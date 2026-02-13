@@ -213,7 +213,7 @@ class AuthService extends BaseService {
             app_uid,
             ...(actor_type.session ? { session: this.uuid_fpe.encrypt(actor_type.session) } : {}),
         },
-        this.global_config.jwt_secret);
+        this.global_config.jwt_secret, { expiresIn: '24h' });
 
         return token;
     }
@@ -305,7 +305,7 @@ class AuthService extends BaseService {
             uuid: session.uuid,
             // meta: session.meta,
             user_uid: user.uuid,
-        }, this.global_config.jwt_secret);
+        }, this.global_config.jwt_secret, { expiresIn: '7d' });
 
         return { session, token };
     }
@@ -320,8 +320,6 @@ class AuthService extends BaseService {
     */
     async check_session (cur_token, meta) {
         const decoded = this.modules.jwt.verify(cur_token, this.global_config.jwt_secret);
-
-        console.log('\x1B[36;1mDECODED SESSION', decoded);
 
         if ( decoded.type && decoded.type !== 'session' ) {
             return {};
@@ -443,8 +441,6 @@ class AuthService extends BaseService {
                 `(${cols}) VALUES (${vals})`,
             Object.values(insert_object));
         }
-
-        console.log('token uuid?', uuid);
 
         return jwt;
     }

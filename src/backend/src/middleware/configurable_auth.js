@@ -47,7 +47,7 @@ const configurable_auth = options => async (req, res, next) => {
     const optional = options?.optional;
 
     // Request might already have been authed (PreAuthService)
-    if ( req.actor ) next();
+    if ( req.actor ) return next();
 
     // === Getting the Token ===
     // This step came from jwt_auth in src/helpers.js

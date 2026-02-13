@@ -78,7 +78,6 @@ export const HEAD_GET = async (req, res, _filePath, fileNode, _headerLockToken) 
         const options = {};
 
         if ( req.headers['range'] ) {
-            res.status(206);
             options.range = req.headers['range'];
             // Parse the Range header and set Content-Range
             const rangeInfo = parseRangeHeader(req.headers['range']);
@@ -101,6 +100,15 @@ export const HEAD_GET = async (req, res, _filePath, fileNode, _headerLockToken) 
                     fileSize = null;
                 }
 
+                // Validate range bounds per RFC 7233
+                if ( fileSize !== null && (start >= fileSize || (actualEnd !== null && start > actualEnd)) ) {
+                    res.set('Content-Range', `bytes */${fileSize}`);
+                    res.status(416).end('Range Not Satisfiable');
+                    return;
+                }
+
+                res.status(206);
+
                 if ( actualEnd !== null ) {
                     const totalSize = fileSize !== null ? fileSize : '*';
                     const contentRange = `bytes ${start}-${actualEnd}/${totalSize}`;
@@ -112,6 +120,8 @@ export const HEAD_GET = async (req, res, _filePath, fileNode, _headerLockToken) 
                 if ( isMultipart ) {
                     req.headers['range'] = end !== null ? `bytes=${start}-${end}` : `bytes=${start}-`;
                 }
+            } else {
+                res.status(206);
             }
         }
         res.set(headers);
