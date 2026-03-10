@@ -17,28 +17,30 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-import config from '../../config.js';
 import { createRequire } from 'node:module';
+import config from '../../config.js';
+import { APP_ICONS_SUBDOMAIN } from '../../consts/app-icons.js';
 import { HLWrite } from '../../filesystem/hl_operations/hl_write.js';
 import { LLMkdir } from '../../filesystem/ll_operations/ll_mkdir.js';
 import { LLRead } from '../../filesystem/ll_operations/ll_read.js';
 import { NodePathSelector } from '../../filesystem/node/selectors.js';
-import { APP_ICONS_SUBDOMAIN } from '../../consts/app-icons.js';
 import { get_app, get_user } from '../../helpers.js';
 import BaseService from '../../services/BaseService.js';
-import { DB_WRITE } from '../../services/database/consts.js';
+import { DB_READ, DB_WRITE } from '../../services/database/consts.js';
 import { Endpoint } from '../../util/expressutil.js';
 import { buffer_to_stream, stream_to_buffer } from '../../util/streamutil.js';
+import { AppRedisCacheSpace } from './AppRedisCacheSpace.js';
 import DEFAULT_APP_ICON from './default-app-icon.js';
-import IconResult from './lib/IconResult.js';
 
 const require = createRequire(import.meta.url);
 
 const ICON_SIZES = [16, 32, 64, 128, 256, 512];
+const DEFAULT_ICON_SIZE = 128;
+const RAW_BASE64_REGEX = /^[A-Za-z0-9+/]+={0,2}$/;
 const LEGACY_ICON_FILENAME = ({ appUid, size }) => `${appUid}-${size}.png`;
 const ORIGINAL_ICON_FILENAME = ({ appUid }) => `${appUid}.png`;
-const REDIRECT_MAX_AGE_SIZE = 30 * 24 * 60 * 60; // 1 month
-const REDIRECT_MAX_AGE_ORIGINAL = 7 * 24 * 60 * 60; // 1 week
+const REDIRECT_MAX_AGE_SIZE = 15 * 60; // 15 min
+const REDIRECT_MAX_AGE_ORIGINAL = 60; // 1 min
 
 /**
  * AppIconService handles icon generation and serving for apps.
@@ -65,42 +67,54 @@ export class AppIconService extends BaseService {
 
     /**
      * AppIconService listens to this event to register the
-     * endpoint /app-icon/:app_uid/:size which serves the
-     * app icon at the requested size.
+     * endpoints /app-icon/:app_uid and /app-icon/:app_uid/:size
+     * which serve the app icon at the requested size.
      */
-    async ['__on_install.routes'] (_, { app }) {
+    async '__on_install.routes' (_, { app }) {
+        const handler = async (req, res) => {
+            // Validate parameters
+            let { app_uid: appUid, size } = req.params;
+            const resolvedSize = Number(size ?? DEFAULT_ICON_SIZE);
+            if ( ! ICON_SIZES.includes(resolvedSize) ) {
+                res.status(400).send('Invalid size');
+                return;
+            }
+            if ( ! appUid.startsWith('app-') ) {
+                appUid = `app-${appUid}`;
+            }
+
+            const {
+                stream,
+                mime,
+                redirectUrl,
+                redirectCacheControl,
+            } = await this.#getIconStream({
+                appUid,
+                size: resolvedSize,
+                allowRedirect: !this.config.no_subdomain,
+            });
+
+            if ( redirectUrl ) {
+                if ( redirectCacheControl ) {
+                    res.set('Cache-Control', redirectCacheControl);
+                }
+                return res.redirect(302, redirectUrl);
+            }
+
+            res.set('Content-Type', mime);
+            res.set('Cache-Control', 'public, max-age=3600');
+            stream.pipe(res);
+        };
+
+        Endpoint({
+            route: '/app-icon/:app_uid',
+            methods: ['GET'],
+            handler,
+        }).attach(app);
         Endpoint({
             route: '/app-icon/:app_uid/:size',
             methods: ['GET'],
-            handler: async (req, res) => {
-                // Validate parameters
-                let { app_uid: appUid, size } = req.params;
-                if ( ! ICON_SIZES.includes(Number(size)) ) {
-                    res.status(400).send('Invalid size');
-                    return;
-                }
-                if ( ! appUid.startsWith('app-') ) {
-                    appUid = `app-${appUid}`;
-                }
-
-                const {
-                    stream,
-                    mime,
-                    redirectUrl,
-                    redirectCacheControl,
-                } = await this.getIconStream({ appUid, size, allowRedirect: true });
-
-                if ( redirectUrl ) {
-                    if ( redirectCacheControl ) {
-                        res.set('Cache-Control', redirectCacheControl);
-                    }
-                    return res.redirect(302, redirectUrl);
-                }
-
-                res.set('Content-Type', mime);
-                res.set('Cache-Control', 'public, max-age=3600');
-                stream.pipe(res);
-            },
+            handler,
         }).attach(app);
     }
 
@@ -109,35 +123,49 @@ export class AppIconService extends BaseService {
     }
 
     async iconifyApps ({ apps, size }) {
-        return await Promise.all(apps.map(async app => {
-            const iconResult = await this.getIconStream({
-                appIcon: app.icon,
+        return apps.map(app => {
+            const iconPath = this.getAppIconPath({
                 appUid: app.uid ?? app.uuid,
                 size,
             });
-
-            if ( iconResult.dataUrl ?? iconResult.data_url ) {
-                app.icon = iconResult.dataUrl ?? iconResult.data_url;
-                return app;
-            }
-
-            try {
-                const buffer = await stream_to_buffer(iconResult.stream);
-                const respDataUrl = `data:${iconResult.mime};base64,${buffer.toString('base64')}`;
-
-                app.icon = respDataUrl;
-            } catch (e) {
-                this.errors.report('get-launch-apps:icon-stream', {
-                    source: e,
-                });
+            if ( iconPath ) {
+                app.icon = iconPath;
             }
             return app;
-        }));
+        });
     }
 
-    async getIconStream (params) {
-        const result = await this.#getIconStream(params);
-        return new IconResult(result);
+    getAppIconPath ({ appUid, size }) {
+        const normalizedAppUid = this.normalizeAppUid(appUid);
+        if ( typeof normalizedAppUid !== 'string' || !normalizedAppUid ) {
+            return null;
+        }
+
+        const apiBaseUrl = String(config.api_base_url || '').replace(/\/+$/, '');
+        if ( ! apiBaseUrl ) {
+            return null;
+        }
+
+        const resolvedSize = Number(size ?? DEFAULT_ICON_SIZE);
+        if ( ! ICON_SIZES.includes(resolvedSize) ) {
+            return null;
+        }
+
+        return `${apiBaseUrl}/app-icon/${normalizedAppUid}/${resolvedSize}`;
+    }
+
+    getAppIconEndpointUrl ({ appUid }) {
+        const normalizedAppUid = this.normalizeAppUid(appUid);
+        if ( typeof normalizedAppUid !== 'string' || !normalizedAppUid ) {
+            return null;
+        }
+
+        const apiBaseUrl = String(config.api_base_url || '').replace(/\/+$/, '');
+        if ( ! apiBaseUrl ) {
+            return null;
+        }
+
+        return `${apiBaseUrl}/app-icon/${normalizedAppUid}`;
     }
 
     normalizeAppUid (appUid) {
@@ -153,6 +181,31 @@ export class AppIconService extends BaseService {
         );
     }
 
+    isRawBase64ImageString (value) {
+        if ( typeof value !== 'string' ) return false;
+        const trimmed = value.trim();
+        if ( !trimmed || trimmed.length < 16 ) return false;
+        if ( ! RAW_BASE64_REGEX.test(trimmed) ) return false;
+        if ( trimmed.length % 4 !== 0 ) return false;
+
+        try {
+            const decoded = Buffer.from(trimmed, 'base64');
+            if ( decoded.length === 0 ) return false;
+            const normalizedInput = trimmed.replace(/=+$/, '');
+            const reencoded = decoded.toString('base64').replace(/=+$/, '');
+            return normalizedInput === reencoded;
+        } catch {
+            return false;
+        }
+    }
+
+    normalizeRawBase64ImageString (value) {
+        if ( typeof value !== 'string' ) return value;
+        const trimmed = value.trim();
+        if ( ! this.isRawBase64ImageString(trimmed) ) return value;
+        return `data:image/png;base64,${trimmed}`;
+    }
+
     parseAppIconEndpointUrl (iconUrl) {
         if ( typeof iconUrl !== 'string' || iconUrl.startsWith('data:') ) {
             return null;
@@ -165,12 +218,14 @@ export class AppIconService extends BaseService {
             return null;
         }
 
-        const match = pathname.match(/^\/app-icon\/([^/]+)\/(\d+)\/?$/);
+        const match = pathname.match(/^\/app-icon\/([^/]+)(?:\/(\d+))?\/?$/);
         if ( ! match ) return null;
+
+        const size = Number(match[2] ?? DEFAULT_ICON_SIZE);
 
         return {
             appUid: this.normalizeAppUid(match[1]),
-            size: Number(match[2]),
+            size,
         };
     }
 
@@ -304,8 +359,10 @@ export class AppIconService extends BaseService {
 
     async ensureAppIconsSubdomain ({ dirAppIcons }) {
         const dbSites = this.services.get('database').get(DB_WRITE, 'sites');
-        const existing = await dbSites.read('SELECT * FROM subdomains WHERE subdomain = ? LIMIT 1',
-                        [APP_ICONS_SUBDOMAIN]);
+        const existing = await dbSites.read(
+            'SELECT * FROM subdomains WHERE subdomain = ? LIMIT 1',
+            [APP_ICONS_SUBDOMAIN],
+        );
         if ( existing[0] ) return existing[0];
 
         const systemUser = await get_user({ username: 'system' });
@@ -322,8 +379,10 @@ export class AppIconService extends BaseService {
             `sd-${this.modules.uuidv4()}`,
         ]);
 
-        const rows = await dbSites.read('SELECT * FROM subdomains WHERE subdomain = ? LIMIT 1',
-                        [APP_ICONS_SUBDOMAIN]);
+        const rows = await dbSites.read(
+            'SELECT * FROM subdomains WHERE subdomain = ? LIMIT 1',
+            [APP_ICONS_SUBDOMAIN],
+        );
         return rows[0] ?? null;
     }
 
@@ -428,6 +487,77 @@ export class AppIconService extends BaseService {
             });
     }
 
+    queueDataUrlIconWrite ({ appUid, dataUrl }) {
+        const normalizedAppUid = this.normalizeAppUid(appUid);
+        if ( typeof normalizedAppUid !== 'string' || !normalizedAppUid ) return;
+        if ( ! this.isDataUrl(dataUrl) ) return;
+
+        if ( ! this.pendingDataUrlIconWrites ) {
+            this.pendingDataUrlIconWrites = new Set();
+        }
+
+        const key = normalizedAppUid;
+        if ( this.pendingDataUrlIconWrites.has(key) ) return;
+
+        this.pendingDataUrlIconWrites.add(key);
+        Promise.resolve()
+            .then(async () => {
+                const data = {
+                    app_uid: normalizedAppUid,
+                    data_url: dataUrl,
+                };
+                await this.createAppIcons({
+                    data,
+                });
+                if ( typeof data.url === 'string' && data.url ) {
+                    await this.persistConvertedIconUrl({
+                        appUid: normalizedAppUid,
+                        iconUrl: data.url,
+                    });
+                }
+            })
+            .catch(error => {
+                this.errors?.report('AppIconService.queueDataUrlIconWrite', {
+                    source: error,
+                    appUid: normalizedAppUid,
+                });
+            })
+            .finally(() => {
+                this.pendingDataUrlIconWrites.delete(key);
+            });
+    }
+
+    async persistConvertedIconUrl ({ appUid, iconUrl }) {
+        const normalizedAppUid = this.normalizeAppUid(appUid);
+        if ( typeof normalizedAppUid !== 'string' || !normalizedAppUid ) return;
+        if ( typeof iconUrl !== 'string' || !iconUrl ) return;
+
+        const svcDb = this.services.get('database');
+        const dbWrite = svcDb.get(DB_WRITE, 'apps');
+        await dbWrite.write(
+            'UPDATE apps SET icon = ? WHERE uid = ? AND icon LIKE \'data:%\' LIMIT 1',
+            [iconUrl, normalizedAppUid],
+        );
+
+        const dbRead = svcDb.get(DB_READ, 'apps');
+        const rows = await dbRead.read(
+            'SELECT id, uid, name FROM apps WHERE uid = ? LIMIT 1',
+            [normalizedAppUid],
+        );
+        const app = rows[0];
+        if ( app ) {
+            AppRedisCacheSpace.invalidateCachedApp(app);
+        } else {
+            AppRedisCacheSpace.invalidateCachedApp({ uid: normalizedAppUid });
+        }
+
+        const svcEvent = this.services.get('event');
+        await svcEvent.emit('app.changed', {
+            app_uid: normalizedAppUid,
+            action: 'icon-migrated',
+        });
+    }
+
     async #getIconStream ({ appIcon, appUid, size, tries = 0, allowRedirect = false }) {
         appUid = this.normalizeAppUid(appUid);
         const appIconOriginal = appIcon;
@@ -462,13 +592,21 @@ export class AppIconService extends BaseService {
         };
 
         const getFallbackIcon = async () => {
-            let fallbackIcon = appIcon || await (async () => {
-                const app = await getAppCached();
-                return app?.icon || DEFAULT_APP_ICON;
-            })();
+            const app = await getAppCached();
+            const dbIcon = this.normalizeRawBase64ImageString(app?.icon);
+
+            let fallbackIcon = appIcon || dbIcon || DEFAULT_APP_ICON;
             if ( ! this.isDataUrl(fallbackIcon) ) {
                 fallbackIcon = DEFAULT_APP_ICON;
             }
+
+            if ( this.isDataUrl(dbIcon) && fallbackIcon === dbIcon ) {
+                this.queueDataUrlIconWrite({
+                    appUid,
+                    dataUrl: dbIcon,
+                });
+            }
+
             const [metadata, base64] = fallbackIcon.split(',');
             const mime = metadata.split(';')[0].split(':')[1];
             const img = Buffer.from(base64, 'base64');
@@ -612,6 +750,8 @@ export class AppIconService extends BaseService {
             return null;
         }
 
+        iconUrl = this.normalizeRawBase64ImageString(iconUrl);
+
         if ( iconUrl.startsWith('data:') ) {
             const [metadata, base64] = iconUrl.split(',');
             return {
@@ -644,7 +784,7 @@ export class AppIconService extends BaseService {
      * `/system/app_icons` directory if it does not exist,
      * and then to register the event listener for `app.new-icon`.
      */
-    async ['__on_user.system-user-ready'] () {
+    async '__on_user.system-user-ready' () {
         const svcSu = this.services.get('su');
         const svcUser = this.services.get('user');
 
@@ -693,9 +833,9 @@ export class AppIconService extends BaseService {
                     output: originalOutput,
                 });
 
-                const originalUrl = this.getOriginalIconUrl({ appUid });
-                if ( originalUrl ) {
-                    data.url = originalUrl;
+                const endpointUrl = this.getAppIconEndpointUrl({ appUid });
+                if ( endpointUrl ) {
+                    data.url = endpointUrl;
                 }
             }
 

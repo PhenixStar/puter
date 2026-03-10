@@ -17,20 +17,27 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 import { encode } from 'html-entities';
+import { LRUCache } from 'lru-cache';
+import fs from 'node:fs';
 import { is_valid_url } from '../helpers.js';
 import { Endpoint } from '../util/expressutil.js';
 import { PathBuilder } from '../util/pathutil.js';
 import BaseService from './BaseService.js';
-import fs from 'node:fs';
 /**
  * PuterHomepageService serves the initial HTML page that loads the Puter GUI
  * and all of its assets.
  */
 export class PuterHomepageService extends BaseService {
 
+    #outputCache = null;
+
     _construct () {
         this.service_scripts = [];
         this.gui_params = {};
+
+        this.#outputCache = new LRUCache({
+            max: 200,
+        });
     }
 
     /**
@@ -42,11 +49,13 @@ export class PuterHomepageService extends BaseService {
     async _init () {
         // Load manifest
         const config = this.global_config;
-        const manifest_raw = fs.readFileSync(PathBuilder
-            .add(config.assets.gui, { allow_traversal: true })
-            .add('puter-gui.json')
-            .build(),
-        'utf8');
+        const manifest_raw = fs.readFileSync(
+            PathBuilder
+                .add(config.assets.gui, { allow_traversal: true })
+                .add('puter-gui.json')
+                .build(),
+            'utf8',
+        );
         const manifest_data = JSON.parse(manifest_raw);
         this.manifest = manifest_data[config.assets.gui_profile];
     }
@@ -59,7 +68,7 @@ export class PuterHomepageService extends BaseService {
         this.gui_params[key] = val;
     }
 
-    async ['__on_install.routes'] (_, { app }) {
+    async '__on_install.routes' (_, { app }) {
         Endpoint({
             route: '/whoarewe',
             methods: ['GET'],
@@ -119,7 +128,29 @@ export class PuterHomepageService extends BaseService {
         // cloudflare turnstile site key
         const turnstileSiteKey = config.services?.['cloudflare-turnstile']?.enabled ? config.services?.['cloudflare-turnstile']?.site_key : null;
 
-        return res.send(await this.generate_puter_page_html({
+        const cacheKey = (() => {
+            const cacheKeyObject = {
+                ...(meta ? {
+                    title: meta.title,
+                    app_name: meta?.app?.name,
+                } : {}),
+            };
+            return JSON.stringify(
+                cacheKeyObject,
+                Object.keys(cacheKeyObject).sort(),
+            );
+        })();
+
+        // Possibly send cached output
+        {
+            const maybeCachedOutputHTML = this.#outputCache.get(cacheKey);
+            if ( maybeCachedOutputHTML ) {
+                res.send(maybeCachedOutputHTML);
+                return;
+            }
+        }
+
+        const outputHTML = await this.generate_puter_page_html({
             env: config.env,
 
             app_origin: config.origin,
@@ -161,7 +192,18 @@ export class PuterHomepageService extends BaseService {
                 captchaRequired: captchaRequired,
                 turnstileSiteKey: turnstileSiteKey,
             },
-        }));
+        });
+
+        // TODO: we will re-enable this shortly (within 24 hours)
+        //
+        //   It is currently disabled so that we can determine the impact on
+        //   performance of b687ba0 (not b687ba0 specifically but the subsequent
+        //   fixed version of b687ba0) in isolation without confounding
+        //   variables.
+        //
+        // this.#outputCache.set(cacheKey, outputHTML);
+
+        res.send(outputHTML);
     }
 
     async generate_puter_page_html ({
@@ -246,7 +288,13 @@ export class PuterHomepageService extends BaseService {
 
     <head>
         <title>${e(title)}</title>
-        
+        <link rel="preload" href="${this.config.gui_bundle ?? '/dist/bundle.min.js'}" as="script" />
+        ${bundled
+                ? `<link rel="preload" href="${this.config.gui_puterjs_bundle || 'https://js.puter.com/v2/'} as="script"></script>`
+                : ''
+        }
+
+
         <meta name="author" content="${e(company)}">
         <meta name="description" content="${e((description).replace(/\n/g, ' ').trim())}">
         <meta name="facebook-domain-verification" content="e29w3hjbnnnypf4kzk2cewcdaxym1y" />
@@ -285,7 +333,9 @@ export class PuterHomepageService extends BaseService {
         <meta name="msapplication-TileColor" content="#ffffff">
         <meta name="msapplication-TileImage" content="${asset_dir}/favicons/ms-icon-144x144.png">
         <meta name="theme-color" content="#ffffff">
-
+        ${(bundled)
+            ? `<link rel="stylesheet" href="${this.config.gui_css || '/dist/bundle.min.css'}">` : ''}
+        
         <!-- Preload images when applicable -->
         <link rel="preload" as="image" href="https://puter-assets.b-cdn.net/wallpaper.webp">
 
@@ -346,13 +396,13 @@ export class PuterHomepageService extends BaseService {
         <script>window.puter_gui_enabled = true;</script>
         ${custom_script_tags_str
         }
-        ${use_bundled_gui
+        ${bundled
                 ? '<script>window.gui_env = \'prod\';</script>'
                 : ''
         }
 
         <!-- Load the GUI script -->
-        <script src="/dist/bundle.min.js"></script>
+        <script src="${this.config.gui_bundle ?? '/dist/bundle.min.js'}"></script>
         <!-- Initialize GUI when document is loaded -->
         <script type="module">
         /**

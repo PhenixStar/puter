@@ -91,6 +91,10 @@ class APIError {
             status: 422,
             message: 'Cannot copy an item into itself.',
         },
+        'directory_depth_limit_exceeded': {
+            status: 422,
+            message: ({ limit, would_be }) => `Directory depth limit exceeded. Limit is ${limit}, would be ${would_be}.`,
+        },
         'cannot_move_to_root': {
             status: 422,
             message: 'Cannot move an item to the root directory.',
@@ -155,7 +159,9 @@ class APIError {
         },
         'forbidden': {
             status: 403,
-            message: 'Permission denied.',
+            message: ({ debug_reason }) => (process.env.DEBUG && debug_reason)
+                ? `Permission denied: ${debug_reason}`
+                : 'Permission denied.',
         },
         'immutable': {
             status: 403,
@@ -451,6 +457,10 @@ class APIError {
             status: 403,
             message: 'This endpoint must be requested with a user session',
         },
+        'session_required': {
+            status: 403,
+            message: 'This endpoint requires a full session (e.g. change password cannot be done with a GUI token).',
+        },
         'temporary_accounts_not_allowed': {
             status: 403,
             message: 'Temporary accounts cannot perform this action',
@@ -462,6 +472,10 @@ class APIError {
         'password_mismatch': {
             status: 403,
             message: 'Password does not match.',
+        },
+        'oidc_revalidation_required': {
+            status: 403,
+            message: 'Re-validate by signing in with your linked account (e.g. Google).',
         },
 
         // Object Mapping
